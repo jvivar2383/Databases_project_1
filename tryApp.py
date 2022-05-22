@@ -5,8 +5,10 @@ from flask import Flask, request, render_template, flash
 from flask_paginate import Pagination, get_page_args
 import mysql.connector
 from mysql.connector import Error
-
-
+import re
+import string 
+import numpy as np
+import pandas as pd
 # create app instance
 app = Flask(__name__)
 
@@ -55,7 +57,7 @@ def ParagrahExtractor(listOfLinks):
 
 #this functions searches fro similart results to putput depending in the query
 
-def get_similar_articles(q, df):
+def get_similar_articles(q, df, vectorizer, doc):
     print("query:", q)
     print("Here are the most useful results: ")
     # Convert the query become a vector
@@ -68,19 +70,34 @@ def get_similar_articles(q, df):
   
     # Sort the values 
     sim_sorted = sorted(sim.items(), key=lambda x: x[1], reverse=True)
+    
     # Print the articles and their similarity values
+    connection = mysql.connector.connect(host='localhost',database='MY_CUSTOM_BOT',user='root',password='Soyunaloca1',
+                                    auth_plugin='caching_sha2_password')
+    
     for k, v in sim_sorted:
-        
         if v != 0.0:
-            print("Amount of results:", v)
-            print(doc[k])
-            print()
+            iD = doc[k][0]
+            
+            if connection.is_connected():
+                cursor = connection.cursor()
+                query  = "SELECT link FROM url_table WHERE ID = %s LIMIT 10"
+                cursor.execute(query, [(iD)])
+                links = []
+                for link in cursor:
+                    links.append(link)
+                cursor.close()
+                connection.close()
+            
+            
+    return links
             
 
 
 @app.route('/')
 def home():
     if 'search' in request.args:
+        
         connection = mysql.connector.connect(host='localhost',
                                          database='MY_CUSTOM_BOT',
                                          user='root',
@@ -106,13 +123,16 @@ def home():
       
 
             query = { '$text': {'$search': request.args.get('search')} }
-            cursor.execute(query)
+            sql = "select URL from urls_table where key_word like %s"
+            cursor.execute(sql,("%"+query +"%",))
+            search_results = cursor.fetchall()
         
         for entry in search_results:
             flash(entry, 'success')
         
         # close connection
-        client.close()
+        connection.close()
+        cursor.colse()
 
 
     return render_template('search.html')
@@ -130,23 +150,24 @@ def home():
 def search_results():
     if 'search' in request.args:
         
-        connection = mysql.connector.connect(host='localhost',database='MY_CUSTOM_BOT',user='root',password='Soyunaloca1',/
+        
+        connection = mysql.connector.connect(host='localhost',database='MY_CUSTOM_BOT',
+                                             user='root',password='Soyunaloca1',
                                              auth_plugin='caching_sha2_password')
         
-        
-        query = { '$text': {'$search': request.args.get('search')} }
+        cursor = connection.cursor()
+    
         #description column is tbd based on the new name of the database
-        sql = "FROM url_table SELECT ID, Key_words, link WHERE Key_words LIKE %s"
-        cursor.execute(sql, ("%" + query +'%'))
-        data = {'ID':[], 'desc':[], 'link':[]}
-        for link in cursor:
-            data['ID'].append(link[0])
-            data['desc'].append(link[1])
-            data['link'].append(link[2])
+        query = { '$text': {'$search': request.args.get('search')} }
+        
+        sql = "select URL from urls_table where key_word like %s limit 8"
+        cursor.execute(sql,("%"+query +"%",))
+        search_results = cursor.fetchall()
+        links = []
+        for link in search_results:
+            links.append(link[0])
         
         
-        
-        links = data['link']
         doc = ParagrahExtractor(links)
         vectorizer = TfidfVectorizer()
         # It fits the data and transform it as a vector
@@ -155,14 +176,7 @@ def search_results():
         X = X.T.toarray()
         # Create a DataFrame and set the vocabulary as the index
         df = pd.DataFrame(X, index=vectorizer.get_feature_names())
-        # Routes
-        results = get_similar_articles(query, df)
-        cursor.close()
-        connection.close()
-        
-        
-        
-        
+        search_results = get_similar_articles(query, df, vectorizer, doc)
         
         """
         connect_uri = 'mongodb+srv://cmk:342124@todolist-c483l.gcp.mongodb.net/search?retryWrites=true&w=majority'
@@ -192,6 +206,8 @@ def search_results():
                                 pagination=pagination,
                                 len=len)
 
+
+
 if __name__ == '__main__':
     app.secret_key='secret123'
     app.run(debug=True, threaded=True)
@@ -203,35 +219,8 @@ if __name__ == '__main__':
     
     
 
-# Instantiate a TfidfVectorizer object
-vectorizer = TfidfVectorizer()
-# It fits the data and transform it as a vector
-X = vectorizer.fit_transform(doc)
-# Convert the X as transposed matrix
-X = X.T.toarray()
-# Create a DataFrame and set the vocabulary as the index
-df = pd.DataFrame(X, index=vectorizer.get_feature_names())
-# Routes
 
 
-def get_similar_articles(q, df):
-    print("query:", q)
-    print("Here are the most useful results: ")
-    # Convert the query become a vector
-    q = [q]
-    q_vec = vectorizer.transform(q).toarray().reshape(df.shape[0],)
-    sim = {}
-    # Calculate the similarity
-    for i in range(10):
-        sim[i] = np.dot(df.loc[:, i].values, q_vec) / np.linalg.norm(df.loc[:, i]) * np.linalg.norm(q_vec)
-  
-    # Sort the values 
-    sim_sorted = sorted(sim.items(), key=lambda x: x[1], reverse=True)
-    # Print the articles and their similarity values
-    for k, v in sim_sorted:
-        
-        if v != 0.0:
-            print("Amount of results:", v)
-            print(doc[k])
-            print()
+
+
             
